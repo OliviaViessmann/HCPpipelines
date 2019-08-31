@@ -126,9 +126,6 @@ if [ X${ScoutInput} != X ] ; then
    ${FSLDIR}/bin/fslmaths ${ScoutInput} $biascom $jacobiancom -mas ${BrainMask} -mas ${InputfMRI}_mask -thr 0 -ing 10000 ${ScoutOutput} -odt float
 fi
 
-#Basic Cleanup
-rm ${InputfMRI}.nii.*
-
 echo " "
 echo "END: IntensityNormalization"
 echo " END: `date`" >> $WD/log.txt
