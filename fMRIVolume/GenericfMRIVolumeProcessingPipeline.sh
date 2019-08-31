@@ -1,4 +1,8 @@
 #!/bin/bash 
+# Derivative of the GenericfMRIVolumeProcessingPipeline.sh
+# This script follows the minimal preprocessing of fmri data as in the HCP, but does not warp to MNI, but to the subject's native T1w space instead
+# Edited by Olivia Viessmann, March 2018
+# requires OneStepResampling2Native.sh
 set -e
 
 # Requirements for this script
@@ -13,11 +17,6 @@ set -e
 
 # TODO
 
-if [ -z "${HCPPIPEDIR}" ]; then
-	echo "GenericfMRIVolumeProcessingPipeline.sh: ABORTING - HCPPIPEDIR environment variable not set"
-	exit 1
-fi
-
 # --------------------------------------------------------------------------------
 #  Load Function Libraries
 # --------------------------------------------------------------------------------
@@ -26,63 +25,6 @@ source $HCPPIPEDIR/global/scripts/log.shlib  # Logging related functions
 source $HCPPIPEDIR/global/scripts/opts.shlib # Command line option functions
 
 ################################################ SUPPORT FUNCTIONS ##################################################
-
-# Validate necesary environment variables
-validate_environment_vars()
-{
-	if [ -z "${FSLDIR}" ]; then
-		log_Err_Abort "FSLDIR environment variable not set"
-	fi
-
-	log_Msg "Environment variables used - Start"
-	log_Msg "HCPPIPEDIR: ${HCPPIPEDIR}"
-	log_Msg "FSLDIR: ${FSLDIR}"
-	log_Msg "Environment variables used - End"
-}
-
-# check for incompatible FSL version
-check_fsl_version()
-{
-	local fsl_version_file
-	local fsl_version
-	local fsl_version_array
-	local fsl_primary_version
-	local fsl_secondary_version
-	local fsl_tertiary_version
-
-	# get the current version of FSL in use
-	fsl_version_file="${FSLDIR}/etc/fslversion"
-
-	if [ -f ${fsl_version_file} ]; then
-		fsl_version=$(cat ${fsl_version_file})
-		log_Msg "Determined that the FSL version in use is ${fsl_version}"
-	else
-		log_Err_Abort "Cannot tell which version of FSL is in use"
-	fi
-
-	# break FSL version string into components: primary, secondary, and tertiary
-	# FSL X.Y.Z would have X as primary, Y as secondary, and Z as tertiary versions
-
-	fsl_version_array=(${fsl_version//./ })
-	
-	fsl_primary_version="${fsl_version_array[0]}"
-	fsl_primary_version=${fsl_primary_version//[!0-9]/}
-
-	fsl_secondary_version="${fsl_version_array[1]}"
-	fsl_secondary_version=${fsl_secondary_version//[!0-9]/}
-
-	fsl_tertiary_version="${fsl_version_array[2]}"
-	fsl_tertiary_version=${fsl_tertiary_version//[!0-9]/}
-
-	# FSL version 6.0.0 is unsupported
-	if [[ $(( ${fsl_primary_version} )) -eq 6 ]]; then
-		if [[ $(( ${fsl_secondary_version} )) -eq 0 ]]; then
-			if [[ $(( ${fsl_tertiary_version} )) -eq 0 ]]; then
-				log_Err_Abort "FSL version 6.0.0 is unsupported. Please upgrade to at least version 6.0.1"
-			fi
-		fi
-	fi
-}
 
 # --------------------------------------------------------------------------------
 #  Usage Description Function
@@ -93,9 +35,10 @@ show_usage() {
     exit 1
 }
 
-validate_environment_vars
-
-check_fsl_version
+# --------------------------------------------------------------------------------
+#   Establish tool name for logging
+# --------------------------------------------------------------------------------
+#log_SetToolName "GenericfMRIVolumeProcessingPipeline.sh"
 
 ################################################## OPTION PARSING #####################################################
 
@@ -138,8 +81,8 @@ log_Msg "PhaseInputName: ${PhaseInputName}"
 GEB0InputName=`opts_GetOpt1 "--fmapgeneralelectric" $@`
 log_Msg "GEB0InputName: ${GEB0InputName}"
 
-EchoSpacing=`opts_GetOpt1 "--echospacing" $@`  # *Effective* Echo Spacing of fMRI image, in seconds
-log_Msg "EchoSpacing: ${EchoSpacing}"
+DwellTime=`opts_GetOpt1 "--echospacing" $@`  
+log_Msg "DwellTime: ${DwellTime}"
 
 deltaTE=`opts_GetOpt1 "--echodiff" $@`  
 log_Msg "deltaTE: ${deltaTE}"
@@ -231,6 +174,7 @@ T1wRestoreImageBrain="T1w_acpc_dc_restore_brain"
 T1wFolder="T1w" #Location of T1w images
 AtlasSpaceFolder="MNINonLinear"
 ResultsFolder="Results"
+#OV this has not been changed to original version 
 BiasField="BiasField_acpc_dc"
 BiasFieldMNI="BiasField"
 T1wAtlasName="T1w_restore"
@@ -270,7 +214,9 @@ case "$BiasCorrection" in
         then
             log_Err_Abort "SEBASED bias correction is only available with --dcmethod=TOPUP"
         fi
-        UseBiasFieldMNI="$sebasedBiasFieldMNI"
+        
+	UseBiasFieldMNI="$sebasedBiasFieldMNI"
+
 		;;
     "")
         log_Err_Abort "--biascorrection option not specified"
@@ -285,7 +231,8 @@ esac
 
 T1wFolder="$Path"/"$Subject"/"$T1wFolder"
 AtlasSpaceFolder="$Path"/"$Subject"/"$AtlasSpaceFolder"
-ResultsFolder="$AtlasSpaceFolder"/"$ResultsFolder"/"$NameOffMRI"
+#OV: change to T1 folder as our results are all in native space
+ResultsFolder="$T1wFolder"/"$ResultsFolder"/"$NameOffMRI"
 
 mkdir -p ${T1wFolder}/Results/${NameOffMRI}
 
@@ -333,7 +280,7 @@ else
     ${RUN} ${FSLDIR}/bin/imcp "$fMRIFolder"/"$OrigTCSName" "$fMRIFolder"/"$NameOffMRI"_gdc
     ${RUN} ${FSLDIR}/bin/fslroi "$fMRIFolder"/"$NameOffMRI"_gdc "$fMRIFolder"/"$NameOffMRI"_gdc_warp 0 3
     ${RUN} ${FSLDIR}/bin/fslmaths "$fMRIFolder"/"$NameOffMRI"_gdc_warp -mul 0 "$fMRIFolder"/"$NameOffMRI"_gdc_warp
-    ${RUN} ${FSLDIR}/bin/imcp "$fMRIFolder"/"$OrigScoutName" "$fMRIFolder"/"$ScoutName"_gdc
+   ${RUN} ${FSLDIR}/bin/imcp "$fMRIFolder"/"$OrigScoutName" "$fMRIFolder"/"$ScoutName"_gdc
     #make fake jacobians of all 1s, for completeness
     ${RUN} ${FSLDIR}/bin/fslmaths "$fMRIFolder"/"$OrigScoutName" -mul 0 -add 1 "$fMRIFolder"/"$ScoutName"_gdc_warp_jacobian
     ${RUN} ${FSLDIR}/bin/fslroi "$fMRIFolder"/"$NameOffMRI"_gdc_warp "$fMRIFolder"/"$NameOffMRI"_gdc_warp_jacobian 0 1
@@ -376,7 +323,7 @@ ${RUN} ${PipelineScripts}/DistortionCorrectionAndEPIToT1wReg_FLIRTBBRAndFreeSurf
        --echodiff=${deltaTE} \
        --SEPhaseNeg=${SpinEchoPhaseEncodeNegative} \
        --SEPhasePos=${SpinEchoPhaseEncodePositive} \
-       --echospacing=${EchoSpacing} \
+       --echospacing=${DwellTime} \
        --unwarpdir=${UnwarpDir} \
        --owarp=${T1wFolder}/xfms/${fMRI2strOutputTransform} \
        --biasfield=${T1wFolder}/${BiasField} \
@@ -394,69 +341,103 @@ ${RUN} ${PipelineScripts}/DistortionCorrectionAndEPIToT1wReg_FLIRTBBRAndFreeSurf
        --biascorrection=${BiasCorrection} \
        --usejacobian=${UseJacobian}
 
-#One Step Resampling
-log_Msg "One Step Resampling"
+#OV
+log_Msg "Distortion correction finished"
+#OVstart: change to my script
+#One Step Resampling (changed --t1, --freesurferbrainmask to T1,--biasfield
+log_Msg "One Step Resampling to native space"
 log_Msg "mkdir -p ${fMRIFolder}/OneStepResampling"
-
+#OV change bias fiel to bias field in native space below in --biasfield option
 mkdir -p ${fMRIFolder}/OneStepResampling
-${RUN} ${PipelineScripts}/OneStepResampling.sh \
+${RUN} ${PipelineScripts}/OneStepResampling2Native.sh \
        --workingdir=${fMRIFolder}/OneStepResampling \
-       --infmri=${fMRIFolder}/${OrigTCSName}.nii.gz \
-       --t1=${AtlasSpaceFolder}/${T1wAtlasName} \
+      --infmri=${fMRIFolder}/${OrigTCSName}.nii.gz \
+       --t1=${T1wFolder}/${T1wImage} \
        --fmriresout=${FinalfMRIResolution} \
        --fmrifolder=${fMRIFolder} \
        --fmri2structin=${T1wFolder}/xfms/${fMRI2strOutputTransform} \
        --struct2std=${AtlasSpaceFolder}/xfms/${AtlasTransform} \
-       --owarp=${AtlasSpaceFolder}/xfms/${OutputfMRI2StandardTransform} \
-       --oiwarp=${AtlasSpaceFolder}/xfms/${Standard2OutputfMRITransform} \
+       --owarp=${T1wFolder}/xfms/${NameOffMRI}2struct \
+       --oiwarp=${T1wFolder}/xfms/struct2${NameOffMRI} \
        --motionmatdir=${fMRIFolder}/${MotionMatrixFolder} \
        --motionmatprefix=${MotionMatrixPrefix} \
        --ofmri=${fMRIFolder}/${NameOffMRI}_nonlin \
-       --freesurferbrainmask=${AtlasSpaceFolder}/${FreeSurferBrainMask} \
-       --biasfield=${AtlasSpaceFolder}/${BiasFieldMNI} \
+       --freesurferbrainmask=${T1wFolder}/${FreeSurferBrainMask} \
+       --biasfield=${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_sebased_bias \
        --gdfield=${fMRIFolder}/${NameOffMRI}_gdc_warp \
        --scoutin=${fMRIFolder}/${OrigScoutName} \
        --scoutgdcin=${fMRIFolder}/${ScoutName}_gdc \
        --oscout=${fMRIFolder}/${NameOffMRI}_SBRef_nonlin \
-       --ojacobian=${fMRIFolder}/${JacobianOut}_MNI.${FinalfMRIResolution}
+       --ojacobian=${fMRIFolder}/${JacobianOut}_Native.${FinalfMRIResolution} #OV changed naming
+
 
 log_Msg "mkdir -p ${ResultsFolder}"
 mkdir -p ${ResultsFolder}
 
-#now that we have the final MNI fMRI space, resample the T1w-space sebased bias field related outputs
+#now that we have the final Native fMRI space, resample the T1w-space sebased bias field related outputs
 #the alternative is to add a bunch of optional arguments to OneStepResampling that just do the same thing
 #we need to do this before intensity normalization, as it uses the bias field output
 if [[ ${DistortionCorrection} == "TOPUP" ]]
 then
+#OVstart
+echo "Resampling bias field to fMRI resolution"
+    
     #create MNI space corrected fieldmap images
-    ${FSLDIR}/bin/applywarp --rel --interp=spline --in=${DCFolder}/PhaseOne_gdc_dc_unbias -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -o ${ResultsFolder}/${NameOffMRI}_PhaseOne_gdc_dc
-    ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_PhaseOne_gdc_dc -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_PhaseOne_gdc_dc
-    ${FSLDIR}/bin/applywarp --rel --interp=spline --in=${DCFolder}/PhaseTwo_gdc_dc_unbias -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -o ${ResultsFolder}/${NameOffMRI}_PhaseTwo_gdc_dc
-    ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_PhaseTwo_gdc_dc -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_PhaseTwo_gdc_dc    
+    #${FSLDIR}/bin/applywarp --rel --interp=spline --in=${DCFolder}/PhaseOne_gdc_dc_unbias -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -o ${ResultsFolder}/${NameOffMRI}_PhaseOne_gdc_dc
+    #${FSLDIR}/bin/applywarp --rel --interp=spline --in=${DCFolder}/PhaseTwo_gdc_dc_unbias -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -o ${ResultsFolder}/${NameOffMRI}_PhaseTwo_gdc_dc
+    #OV: the bias fields are already in T1 space so let's just copy them to not mess up naming later
+#    cp ${DCFolder}/PhaseOne_gdc_dc_unbias.nii.gz ${ResultsFolder}/${NameOffMRI}_PhaseOne_gdc_dc.nii.gz
+#    cp ${DCFolder}/PhaseTwo_gdc_dc_unbias.nii.gz ${ResultsFolder}/${NameOffMRI}_PhaseTwo_gdc_dc.nii.gz
+
     #create MNINonLinear final fMRI resolution bias field outputs
     if [[ ${BiasCorrection} == "SEBASED" ]]
     then
-        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/sebased_bias_dil.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_sebased_bias.nii.gz
-        ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_sebased_bias.nii.gz -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_sebased_bias.nii.gz
+echo "Skipping the bias field warping to MNI"
+#        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/sebased_bias_dil.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_sebased_bias.nii.gz
+#       ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_sebased_bias.nii.gz -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_sebased_bias.nii.gz
         
-        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/sebased_reference_dil.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_sebased_reference.nii.gz
-        ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_sebased_reference.nii.gz -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_sebased_reference.nii.gz
+#        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/sebased_reference_dil.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_sebased_reference.nii.gz
+#       cp ${DCFolder}/ComputeSpinEchoBiasField/sebased_reference_dil.nii.gz ${ResultsFolder}/${NameOffMRI}_sebased_reference.nii.gz
+#       ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_sebased_reference.nii.gz -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_sebased_reference.nii.gz
         
-        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_dropouts.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_dropouts.nii.gz
+#        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_dropouts.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_dropouts.nii.gz
+#       cp ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_dropouts.nii.gz ${ResultsFolder}/${NameOffMRI}_dropouts.nii.gz
+#OV Need to downsample the spin echo based field maps to the fMRI resolution
+# Step 0: calculate the registratio between high res bias map and rfMRI SBRef, store .mat file
+  ${FSLDIR}/bin/flirt \
+	-in ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_sebased_bias.nii.gz \
+	-ref ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin\
+	-omat ${fMRIFolder}/Highres_sebased_bias2${NameOffMRI}.mat
 
-        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_pseudo_transmit_raw.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_pseudo_transmit_raw.nii.gz
-        ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_pseudo_transmit_raw.nii.gz -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_pseudo_transmit_raw.nii.gz
-        ${FSLDIR}/bin/applywarp --interp=trilinear -i ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_pseudo_transmit_field.nii.gz -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin -w ${AtlasSpaceFolder}/xfms/${AtlasTransform} -o ${ResultsFolder}/${NameOffMRI}_pseudo_transmit_field.nii.gz
-        ${FSLDIR}/bin/fslmaths ${ResultsFolder}/${NameOffMRI}_pseudo_transmit_field.nii.gz -mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_pseudo_transmit_field.nii.gz
-    fi
+#Step 1: dilate the highres bias field to the full FOV to be on the safe side in case the subject moved a lot
+  ${FSLDIR}/bin/fslmaths ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_sebased_bias.nii.gz \
+                        -dilall ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_sebased_bias_dilated.nii.gz  
+
+#Step 2: Apply registration to rfMRI reference (also does the downsampling) 
+  ${FSLDIR}/bin/flirt \
+	-in ${DCFolder}/ComputeSpinEchoBiasField/${NameOffMRI}_sebased_bias_dilated.nii.gz \
+	-ref ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin\
+        -applyxfm -init ${fMRIFolder}/Highres_sebased_bias2${NameOffMRI}.mat \
+	-out ${fMRIFolder}/${NameOffMRI}_sebased_bias_dilated.${FinalfMRIResolution}.nii.gz
+
+#STep 3: And apply brain mask in fMIR resolution
+  ${FSLDIR}/bin/fslmaths ${fMRIFolder}/${NameOffMRI}_sebased_bias_dilated.${FinalfMRIResolution}.nii.gz \
+	-mas ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz \
+         ${fMRIFolder}/${NameOffMRI}_sebased_bias.${FinalfMRIResolution}.nii.gz
+ 
+
+#OVend
+   fi
 fi
 
 #Intensity Normalization and Bias Removal
+#OV changed naming of jacobian to native one and swapped MNI bias field for native acpc bias field
+#OV changed to bias field in native space, but at rfMRI resolution
 log_Msg "Intensity Normalization and Bias Removal"
 ${RUN} ${PipelineScripts}/IntensityNormalization.sh \
        --infmri=${fMRIFolder}/${NameOffMRI}_nonlin \
-       --biasfield=${UseBiasFieldMNI} \
-       --jacobian=${fMRIFolder}/${JacobianOut}_MNI.${FinalfMRIResolution} \
+       --biasfield=${fMRIFolder}/${NameOffMRI}_sebased_bias.${FinalfMRIResolution} \
+       --jacobian=${fMRIFolder}/${JacobianOut}_Native.${FinalfMRIResolution}  \
        --brainmask=${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution} \
        --ofmri=${fMRIFolder}/${NameOffMRI}_nonlin_norm \
        --inscout=${fMRIFolder}/${NameOffMRI}_SBRef_nonlin \
@@ -473,8 +454,10 @@ ${RUN} cp -r ${fMRIFolder}/${NameOffMRI}_nonlin_norm.nii.gz ${ResultsFolder}/${N
 ${RUN} cp -r ${fMRIFolder}/${MovementRegressor}.txt ${ResultsFolder}/${MovementRegressor}.txt
 ${RUN} cp -r ${fMRIFolder}/${MovementRegressor}_dt.txt ${ResultsFolder}/${MovementRegressor}_dt.txt
 ${RUN} cp -r ${fMRIFolder}/${NameOffMRI}_SBRef_nonlin_norm.nii.gz ${ResultsFolder}/${NameOffMRI}_SBRef.nii.gz
-${RUN} cp -r ${fMRIFolder}/${JacobianOut}_MNI.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_${JacobianOut}.nii.gz
-${RUN} cp -r ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}
+${RUN} cp -r ${fMRIFolder}/${JacobianOut}_Native.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_${JacobianOut}.nii.gz #OV changed naming to Native
+${RUN} cp -r ${fMRIFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${FreeSurferBrainMask}.${FinalfMRIResolution}.nii.gz
+#OV also copies the bias field at fMRI resolution
+${RUN} cp -r ${fMRIFolder}/${NameOffMRI}_sebased_bias.${FinalfMRIResolution}.nii.gz ${ResultsFolder}/${NameOffMRI}_sebased_bias.${FinalfMRIResolution}.nii.gz
 ###Add stuff for RMS###
 ${RUN} cp -r ${fMRIFolder}/Movement_RelativeRMS.txt ${ResultsFolder}/Movement_RelativeRMS.txt
 ${RUN} cp -r ${fMRIFolder}/Movement_AbsoluteRMS.txt ${ResultsFolder}/Movement_AbsoluteRMS.txt
@@ -482,13 +465,124 @@ ${RUN} cp -r ${fMRIFolder}/Movement_RelativeRMS_mean.txt ${ResultsFolder}/Moveme
 ${RUN} cp -r ${fMRIFolder}/Movement_AbsoluteRMS_mean.txt ${ResultsFolder}/Movement_AbsoluteRMS_mean.txt
 ###Add stuff for RMS###
 
-#Basic Cleanup
-rm ${fMRIFolder}/${NameOffMRI}_nonlin_norm.nii.gz
+#OV: Run registration of surfaces from native space (ac_pc) to EPI space
+log_Msg "Running registration of surfaces from native to EPI space"
+#Set the correct subjects directory where the freesurfer econstruction lives
+SUBJECTS_DIR=${T1wFolder}
+export SUBJECTS_DIR
+#undistorted EPI reference volume
+EPI_dc_jac=${DCFolder}/FieldMap/SBRef_dc_jac.nii.gz
+fMRI2str_fsl=${DCFolder}/fMRI2str.mat
+ACPC_T1=${T1wFolder}/${T1wImage}.nii.gz
+# mris_convert version of the ac-pc T1, this has a different tkr, but surfaces are constructed from here, 
+#we will need this to convert from orig.mgz to ac-pc.nii to EPI because the fsl fMRI2str.mat file is a 
+#registration between ac-pc and EPI and not from irig.mgz to EPI
+orig=${T1wFolder}/${Subject}/mri/orig.mgz
+NSurf=10
+#Loop over all intermittent surfaces that we created in the PostFreeSurferPipelineBatchInterSurf.sh script
+hemis=(lh rh)
+WriteTransformsToHere=${T1wFolder}/${Subject}/surf #Location to store surfaces
+for hemi in ${hemis[*]}; do
+    for surf in `seq -f %02.0f 0 $NSurf`; do
+        SurfName=midgray.${surf}
+        ${PipelineScripts}/Surf2EPI.sh ${Subject} \
+                                                            ${orig} \
+                                                            ${ACPC_T1} \
+                                                            ${EPI_dc_jac} \
+                                                            ${fMRI2str_fsl} \
+                                                            ${SurfName} \
+                                                            ${hemi} \
+                                                            ${NameOffMRI} \
+                                                            ${WriteTransformsToHere}
+        SurfName=subwhite.${surf}
+        ${PipelineScripts}/Surf2EPI.sh ${Subject} \
+                                                            ${orig} \
+                                                            ${ACPC_T1} \
+                                                            ${EPI_dc_jac} \
+                                                            ${fMRI2str_fsl} \
+                                                            ${SurfName} \
+                                                            ${hemi} \
+                                                            ${NameOffMRI} \
+                                                            ${WriteTransformsToHere}
+    done
+done
 
-#Econ
-#rm "$fMRIFolder"/"$OrigTCSName".nii.gz
-#rm "$fMRIFolder"/"$NameOffMRI"_gdc.nii.gz
-#rm "$fMRIFolder"/"$NameOffMRI"_mc.nii.gz
+#******************* WARP SURFACE OVERLAYS ************************************************************ 
+#Also create surfae overlays of the warp field of the original distorted EPI. 
+#We can then use the overlays later in Matlab to calculate the actual warp of the surfaces.
+#Take the warp from EPI to T1-acpc and invert it, this is in relative conventions i.e. x'=x+w(x), but 
+#for the matlab functio we need absolute x'=w(x)
+#fsl.mat affine to get from EPI space to topup spin echo space
+EPI_nodc_2TopUp=${DCFolder}/FieldMap/SBRef2WarpField.mat
+EPI_nodc_2TopUp_lta=${DCFolder}/FieldMap/SBRef2WarpField.lta
+TopUp2EPI_nodc_lta=${DCFolder}/FieldMap/WarpField2EPI.lta
+#Get distortion direction (either LR or RL)
+Distortion_dir=$(echo $NameOffMRI |cut -d "_" -f3)
+
+#The WarpField files have opposite signs, the number 01 is for LR and 04 for RL
+if [[ $Distortion_dir=="LR" ]]
+ then 
+   TopUpWarp=${DCFolder}/FieldMap/WarpField_01.nii.gz 
+ else
+   TopUpWarp=${DCFolder}/FieldMap/WarpField_04.nii.gz 
+fi
+
+TopUpWarp_surf_abs=${T1wFolder}/xfms/TopUpWarp_${Distortion_dir}_surf_abs.nii.gz
+TopUpWarp_surf_abs_2EPI_nodc=${T1wFolder}/xfms/TopUpWarp_${Distortion_dir}_surf_abs2EPI_nodc.nii.gz
+EPI_nodc_SBRef=${SubjectFolder}/unprocessed/3T/${NameOffMRI}/${Subject}_3T_${NameOffMRI}_SBRef.nii.gz
+
+#Use convertwarp to convert the warp to absolute mm displacements
+${FSLDIR}/bin/convertwarp -r ${TopUpWarp} --rel -w ${TopUpWarp} --absout -o ${TopUpWarp_surf_abs}
+
+##convert the fsl .mat affine to an lta - we need this for mri_vol2surf
+#OVout#lta_convert --infsl ${EPI_nodc_2TopUp} --src ${EPI_nodc_SBRef} --trg ${TopUpWarp} --outlta ${EPI_nodc_2TopUp_lta}
+#OVout#lta_convert --inlta ${EPI_nodc_2TopUp_lta} --outlta ${TopUp2EPI_nodc_lta} --invert 
+
+##use mri_vol2vol to transform the warp field into the epi space
+#mri_vol2vol --mov ${TopUpWarp_surf_abs} --targ ${EPI_nodc_SBRef} --o ${TopUpWarp_surf_abs_2EPI_nodc} --lta ${TopUp2EPI_nodc_lta}
+
+#Create surface overlays of the warp field for each surface
+#OVout#for hemi in ${hemis[*]}; do
+#OVout#    for surf in `seq -f %03.0f 0 $NSurf`; do
+#OVout#        SurfName=midgray.${surf}_2${NameOffMRI}
+#OVout#        TopUpWarp_surf=${T1wFolder}/${Subject}/surf/${hemi}.${SurfName}_WarpOverlay.mgz
+#OVout#        mri_vol2surf \
+#OVout#                      --srcsubject ${Subject} \
+#OVout#                      --srcreg ${TopUp2EPI_nodc_lta} \
+#OVout#                      --src ${TopUpWarp_surf_abs_2EPI_nodc} \
+#OVout#                      --out ${TopUpWarp_surf} \
+#OVout#                      --hemi ${hemi} \
+#OVout#                      --surf ${SurfName} \
+#OVout#                      --interp trilinear 
+#OVout#
+#OVout#        SurfName=subwhite.${surf}_2${NameOffMRI}
+#OVout#        TopUpWarp_surf=${T1wFolder}/${Subject}/surf/${hemi}.${SurfName}_WarpOverlay.mgz
+#OVout#        mri_vol2surf \
+#OVout#                      --srcsubject ${Subject} \
+#OVout#                      --srcreg ${TopUp2EPI_nodc_lta} \
+#OVout#                     --src ${TopUpWarp_surf_abs_2EPI_nodc} \
+#OVout#                    --out ${TopUpWarp_surf} \
+#OVout#                      --hemi ${hemi} \
+#OVout#                      --surf ${SurfName} \
+#OVout#                      --interp trilineardone
+#OVout#   done 
+#OVout#done
+
+
+
+#OV ***************************************Warp field to EPI space registration      *****
+#	First we tranform the topup warpfield DistortionCorrectionAndEPIToT1wReg_FLIRTBBRAndFreeSurferBBRbased/FieldMap/WarpField01.nii.gz
+#       into the position of the EPI to get each voxels displacement value. We do this with the inverse affine of SBRef2WarpField.mat.
+#OVout#SBRef2WarpFieldTransform=${DCFolder}/FieldMap/SBRef2WarpField.mat
+#OVout#WarpField2SBRefTransform=${DCFolder}/FieldMap/WarpField2SBRef.mat
+#OVout#WarpFieldInEPI=${T1wFolder}/Results/${NameOffMRI}/WarpField2${NameOffMRI}.nii.gz
+
+#OVout#${FSLDIR}/bin/convert_xfm -omat ${WarpField2SBRefTransform} -inverse ${SBRef2WarpFieldTransform}
+#OVout#${FSLDIR}/bin/flirt -in ${TopUpWarp} -ref ${EPI_nodc_SBRef} -applyxfm -init ${WarpField2SBRefTransform} -out ${WarpFieldInEPI} 
+
+#Also transform warp field into T1 acpc aligned space
+#OVout#WarpFieldIn_acpc=${T1wFolder}/Results/${NameOffMRI}/WarpField2acpc_${NameOffMRI}.nii.gz
+#OVout#${FSLDIR}/bin/flirt -in ${WarpFieldInEPI} -ref ${EPI_dc_jac} -applyxfm -init ${fMRI2str_fsl} -out ${WarpFieldIn_acpc}
 
 log_Msg "Completed"
 
